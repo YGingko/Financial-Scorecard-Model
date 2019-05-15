@@ -190,6 +190,7 @@ class WOE_IV:
         self.target = target
 
     def to_band(self, cols, max_bins):
+        band_df = pd.DataFrame(self.data[self.target])
 
         chimerge = ChiMerge(self.data, y_name=self.target)
         for index in range(len(cols)):
@@ -197,7 +198,7 @@ class WOE_IV:
             max_bin = max_bins[index]
             cutoff = chimerge.bin_cutoff(col, confidence=3.841, max_bins=max_bin)
 
-            pd.cut(self.data[col], bins=[-np.inf] + cutoff + [np.inf])
+            band_df[col + '_band'] = pd.cut(self.data[col], bins=[-np.inf] + cutoff + [np.inf])
 
 
 
