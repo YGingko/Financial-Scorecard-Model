@@ -20,7 +20,8 @@ class ChiMerge(object):
         if key is not None:
             self.data = self.data.set_index(key)
 
-    def calc_chi2(self, df, total_col, bad_col, bad_rate):
+    @staticmethod
+    def calc_chi2(df, total_col, bad_col, bad_rate):
         tmp = df.copy()
         tmp['expected'] = tmp[total_col].map(lambda x: bad_rate * x)
         return sum(pow(tmp['expected'] - tmp[bad_col], 2) / tmp['expected'])
@@ -58,14 +59,14 @@ class ChiMerge(object):
                 chi2_values.append(self.calc_chi2(tmp, 'total_cnt', 'bad_cnt', bad_rate))
 
             # Determine when to stop interval merging
-            if confidence is None:
-                if max_bins is None:
+            if pd.isna(confidence):
+                if pd.isna(max_bins):
                     confidence = 3.841
                     max_bins = 5
                 else:
                     confidence = -np.inf
             else:
-                if max_bins is None:
+                if pd.isna(max_bins):
                     max_bins = np.inf
 
             if all([min(chi2_values) >= confidence, bin_cnt <= max_bins]):
@@ -162,7 +163,7 @@ class ChiMerge(object):
 
     def badrate_encoding(self, col):
         """
-        For category data, use bad_rate to replace the original value, convert into a continuous variable and then binned.
+        For category data, use bad_rate to replace the original value, convert into a continuous variable and then band.
         There is no need to bin if the variable are fewer categories in principle.
 
         Parameters:
@@ -180,3 +181,23 @@ class ChiMerge(object):
 
         regroup['bad_rate'] = regroup['bad_cnt'] / regroup['total_cnt']
         return self.data.merge(regroup[[col, 'bad_rate']], on=col, how='left')['bad_rate']
+
+
+class WOE_IV:
+
+    def __init__(self, df, target):
+        self.data = df
+        self.target = target
+
+    def to_band(self, cols, max_bins):
+
+        chimerge = ChiMerge(self.data, y_name=self.target)
+        for index in range(len(cols)):
+            col = cols[index]
+            max_bin = max_bins[index]
+            cutoff = chimerge.bin_cutoff(col, confidence=3.841, max_bins=max_bin)
+
+            pd.cut(self.data[col], bins=[-np.inf] + cutoff + [np.inf])
+
+
+
