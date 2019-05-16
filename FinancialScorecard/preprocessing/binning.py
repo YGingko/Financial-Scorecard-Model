@@ -50,7 +50,7 @@ class ChiMerge(object):
         regroup.reset_index(level=0, inplace=True)
 
         # Initialize the bins
-        bins = [[i] for i in sorted(set(self.data[col].unique()))]
+        bins = [[i] for i in sorted(set(self.data[col].dropna().unique()))]
         bin_cnt = len(bins)
         while bin_cnt > 1:
             chi2_values = []
@@ -92,7 +92,8 @@ class ChiMerge(object):
         cutoff = [b[-1] for b in bins[:-1]]
         return cutoff
 
-    def calc_woe(self, col):
+    @staticmethod
+    def calc_woe_iv(df, col, target):
         """
         Calculate WOE and IV
 
@@ -105,12 +106,12 @@ class ChiMerge(object):
         """
 
         # Calculate total number, good number, bad number in total sample
-        bad = self.data[self.y_name].sum()
-        good = self.data.shape[0] - bad
+        bad = df[target].sum()
+        good = df.shape[0] - bad
 
         # Calculate the total sample number and bad number in each group
-        total_cnt = pd.DataFrame({'total_cnt': self.data.groupby(col)[self.y_name].count()})
-        bad_cnt = pd.DataFrame({'bad_cnt': self.data.groupby(col)[self.y_name].sum()})
+        total_cnt = pd.DataFrame({'total_cnt': df.groupby(col)[target].count()})
+        bad_cnt = pd.DataFrame({'bad_cnt': df.groupby(col)[target].sum()})
         regroup = total_cnt.merge(bad_cnt, left_index=True, right_index=True, how='left')
         regroup.reset_index(level=0, inplace=True)
 
@@ -120,9 +121,10 @@ class ChiMerge(object):
         regroup['WOE'] = np.log(regroup['bad_pcnt'] / regroup['good_pcnt'])
         regroup['IV'] = (regroup['bad_pcnt'] - regroup['good_pcnt']) * regroup['WOE']
 
-        return regroup['WOE'], regroup['IV'], regroup['IV'].sum()
+        return regroup[['WOE', 'IV']]
 
-    def badrate_monotone(self, col):
+    @staticmethod
+    def badrate_monotone(df, col, target):
         """
         Check the monotone
 
@@ -133,9 +135,10 @@ class ChiMerge(object):
 
         return: bool, if the bad rate is monotone
         """
+        data = df[df[col].notnull() & (df[col] != 'NA')]
 
-        total_cnt = pd.DataFrame({'total_cnt': self.data.groupby(col)[self.y_name].count()})
-        bad_cnt = pd.DataFrame({'bad_cnt': self.data.groupby(col)[self.y_name].sum()})
+        total_cnt = pd.DataFrame({'total_cnt': data.groupby(col)[target].count()})
+        bad_cnt = pd.DataFrame({'bad_cnt': data.groupby(col)[target].sum()})
         regroup = total_cnt.merge(bad_cnt, left_index=True, right_index=True, how='left')
         regroup.sort_index(inplace=True)
         regroup.reset_index(level=0, inplace=True)
@@ -188,17 +191,28 @@ class WOE_IV:
     def __init__(self, df, target):
         self.data = df
         self.target = target
+        self.band_df = pd.DataFrame(self.data[self.target])
+        self.band_monotone_df = pd.DataFrame(self.data[self.target])
+        self.woe_df = pd.DataFrame(self.data[self.target])
+        self.woe_monotone_df = pd.DataFrame(self.data[self.target])
 
     def to_band(self, cols, max_bins):
-        band_df = pd.DataFrame(self.data[self.target])
 
         chimerge = ChiMerge(self.data, y_name=self.target)
         for index in range(len(cols)):
             col = cols[index]
             max_bin = max_bins[index]
-            cutoff = chimerge.bin_cutoff(col, confidence=3.841, max_bins=max_bin)
 
-            band_df[col + '_band'] = pd.cut(self.data[col], bins=[-np.inf] + cutoff + [np.inf])
+            # binning
+            cutoff = chimerge.bin_cutoff(col, confidence=3.841, max_bins=max_bin)
+            self.band_df[col] = pd.cut(self.data[col], bins=[-np.inf] + cutoff + [np.inf]).cat.add_categories('NA').fillna('NA')
+            if chimerge.badrate_monotone(self.band_df, col, self.target):
+                self.band_monotone_df[col] = self.band_monotone_df[col]
+            else:
+                print('column: ', col, 'band error, reason is not monotone')
+
+            woe_iv = chimerge.calc_woe_iv(self.band_df, col, self.target)
+            self.woe_df[col] = self.band_df[col].map(woe_iv['WOE'].to_dict())
 
 
 
