@@ -197,15 +197,18 @@ class WOE_IV:
     def gen_var_info(self):
         self.var_info = pd.DataFrame(self.data.nunique(), columns=['num_of_unique'])
 
-    def cal(self, ):
+    def cal(self, bin_cnt=10):
+        self.gen_table(bin_cnt=10)
 
 
 
-    def gen_table(self):
+    def gen_table(self, bin_cnt):
         chi2 = ChiMerge(self.data, self.target)
         for col in self.data.columns:
             # binning
-            cutoff = chi2.bin_cutoff(col, confidence=3.841, max_bins=max_bin)
+            cutoff = chi2.bin_cutoff(col, confidence=3.841, max_bins=bin_cnt)
+            tmp = pd.cut(self.data[col], bins=[-np.inf] + cutoff + [np.inf]).cat.add_categories('NA').fillna('NA')
+            tmp.value_counts().sort_index()
 
 
     def to_band(self, cols, max_bins):
