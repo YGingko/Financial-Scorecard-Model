@@ -10,15 +10,9 @@ import pandas as pd
 
 class ChiMerge(object):
 
-    def __init__(self, df, key=None, y_name=None):
-        self.set_data(df, key, y_name)
-
-    def set_data(self, df, key=None, y_name=None):
-        self.data = df.copy()
-        self.y_name = y_name
-        self.key = key
-        if key is not None:
-            self.data = self.data.set_index(key)
+    def __init__(self, x, y):
+        self.y_name = y.columns[0]
+        self.data = pd.concat([x, y], axis=1)
 
     @staticmethod
     def calc_chi2(df, total_col, bad_col, bad_rate):
@@ -188,15 +182,34 @@ class ChiMerge(object):
 
 class WOE_IV:
 
-    def __init__(self, df, target):
+    def __init__(self, df, key, y_name):
+        self.set_data(df, key, y_name)
+        self.gen_var_info()
+
+    def set_data(self, df, key, y_name):
         self.data = df
-        self.target = target
-        self.band_df = pd.DataFrame(self.data[self.target])
-        self.band_monotone_df = pd.DataFrame(self.data[self.target])
-        self.woe_df = pd.DataFrame(self.data[self.target])
-        self.woe_monotone_df = pd.DataFrame(self.data[self.target])
+        if key is not None:
+            self.data = df.set_index(keys=key)
+        self.y_name = y_name
+        self.target = self.data[[self.target]]
+        self.data.drop(self.y_name, axis=1, inplace=True)
+
+    def gen_var_info(self):
+        self.var_info = pd.DataFrame(self.data.nunique(), columns=['num_of_unique'])
+
+    def cal(self, ):
+
+
+
+    def gen_table(self):
+        chi2 = ChiMerge(self.data, self.target)
+        for col in self.data.columns:
+            # binning
+            cutoff = chi2.bin_cutoff(col, confidence=3.841, max_bins=max_bin)
+
 
     def to_band(self, cols, max_bins):
+        self.tables = {}
 
         chimerge = ChiMerge(self.data, y_name=self.target)
         for index in range(len(cols)):
@@ -205,6 +218,8 @@ class WOE_IV:
 
             # binning
             cutoff = chimerge.bin_cutoff(col, confidence=3.841, max_bins=max_bin)
+
+
             self.band_df[col] = pd.cut(self.data[col], bins=[-np.inf] + cutoff + [np.inf]).cat.add_categories('NA').fillna('NA')
             if chimerge.badrate_monotone(self.band_df, col, self.target):
                 self.band_monotone_df[col] = self.band_monotone_df[col]
