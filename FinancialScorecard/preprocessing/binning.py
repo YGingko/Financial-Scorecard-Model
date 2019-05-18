@@ -110,7 +110,7 @@ class ChiMerge(object):
 
 class WOE_IV:
 
-    def __init__(self, df, key, y_name):
+    def __init__(self, df, y_name, key=None):
         self.data = df.copy()
         if key is not None:
             self.data = df.set_index(keys=key)
@@ -119,19 +119,22 @@ class WOE_IV:
         self.data.drop(self.y_name, axis=1, inplace=True)
         self.tables = {}
         self.var_info = pd.DataFrame()
+        self.cut_off = {}
 
     def cal(self, bin_cnt=10):
-        self.gen_table(bin_cnt=10)
-        self.cal_table()
-        self.gen_var_info()
-        self.woe_replacement()
+        self.__gen_table(bin_cnt=10)
+        self.__cal_table()
+        self.__gen_var_info()
+        self.__woe_replacement()
 
-    def gen_table(self, bin_cnt):
+    def __gen_table(self, bin_cnt):
         chi2 = ChiMerge(self.data, self.target)
         for col in self.data.columns:
             # binning
             cutoff = chi2.bin_cutoff(col, confidence=3.841, max_bins=bin_cnt)
-            tmp = self.data[[col]]
+            self.cut_off[col] = cutoff
+
+            tmp = self.data[[col]].copy()
             tmp['bin_cut'] = pd.cut(tmp[col], bins=[-np.inf] + cutoff + [np.inf]).cat.add_categories('NA').fillna('NA')
             tmp = pd.concat([tmp, self.target], axis=1)
 
@@ -145,7 +148,7 @@ class WOE_IV:
             table.reset_index(level=0, inplace=True)
             self.tables[col] = table
 
-    def cal_table(self):
+    def __cal_table(self):
         for col, table in self.tables.items():
             self.tables[col]['bad_rate'] = (table[1] / table['size']).fillna(0)
             self.tables[col]['bad_pcnt'] = table[1] / table[1].sum()
@@ -154,7 +157,7 @@ class WOE_IV:
             self.tables[col]['WOE'] = np.log(self.tables[col]['bad_pcnt'] / self.tables[col]['good_pcnt'])
             self.tables[col]['IV'] = (self.tables[col]['bad_pcnt'] - self.tables[col]['good_pcnt']) * self.tables[col]['WOE']
 
-    def gen_var_info(self):
+    def __gen_var_info(self):
         self.var_info = pd.DataFrame(self.data.nunique(), columns=['num_of_unique'])
 
         missing_rate = {}
@@ -165,7 +168,7 @@ class WOE_IV:
             missing_rate[col] = table['size'][0] / table['size'].sum() if 'NA' in table['bin_cut'] else 0
             num_of_bins[col] = table.shape[0]
             iv_value[col] = table['IV'].sum()
-            is_monotone[col] = int(self.badrate_monotone(table))
+            is_monotone[col] = int(self.__badrate_monotone(table))
         self.var_info['iv_value'] = pd.Series(iv_value)
         self.var_info['iv_rank'] = self.var_info['iv_value'].rank(method='min')
         self.var_info['missing_rate(%)'] = np.round(pd.Series(missing_rate), 1)
@@ -173,11 +176,11 @@ class WOE_IV:
         self.var_info['is_monotone'] = pd.Series(is_monotone)
         self.var_info.index.name = 'var_name'
 
-    def woe_replacement(self):
+    def __woe_replacement(self):
         for col, table in self.tables.items():
             self.data[col] = self.data[col].map(table['WOE'].to_dict())
 
-    def badrate_monotone(self, table):
+    def __badrate_monotone(self, table):
         table = table[table['bin_cut'] != 'NA']
         monotone = table['bad_rate'].diff().dropna().astype(bool)
         return len(set(monotone)) == 1
@@ -211,5 +214,9 @@ class WOE_IV:
             tmp = tmp[cols]
         return pd.concat([tmp, self.target], axis=1)
 
-
+    def transform_data(self, test_data):
+        test_data_woe = test_data.copy()
+        for col, cutoff in self.cut_off.items():
+            test_data_woe[col] = pd.cut(test_data_woe[col], bins=[-np.inf] + cutoff + [np.inf]).cat.add_categories('NA').fillna('NA').map(self.tables[col]['WOE'].to_dict())
+        return test_data_woe
 
