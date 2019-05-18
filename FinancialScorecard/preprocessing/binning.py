@@ -4,6 +4,7 @@
 Created by Chocolate on 2019/5/13
 """
 
+import os
 import numpy as np
 import pandas as pd
 
@@ -14,8 +15,7 @@ class ChiMerge(object):
         self.y_name = y.columns[0]
         self.data = pd.concat([x, y], axis=1)
 
-    @staticmethod
-    def calc_chi2(df, total_col, bad_col, bad_rate):
+    def calc_chi2(self, df, total_col, bad_col, bad_rate):
         tmp = df.copy()
         tmp['expected'] = tmp[total_col].map(lambda x: bad_rate * x)
         return sum(pow(tmp['expected'] - tmp[bad_col], 2) / tmp['expected'])
@@ -86,78 +86,6 @@ class ChiMerge(object):
         cutoff = [b[-1] for b in bins[:-1]]
         return cutoff
 
-    @staticmethod
-    def calc_woe_iv(df, col, target):
-        """
-        Calculate WOE and IV
-
-        Parameters:
-        -----------
-        col: column after splitted
-        -----------
-
-        return: WOE, total IV, IV in each bin
-        """
-
-        # Calculate total number, good number, bad number in total sample
-        bad = df[target].sum()
-        good = df.shape[0] - bad
-
-        # Calculate the total sample number and bad number in each group
-        total_cnt = pd.DataFrame({'total_cnt': df.groupby(col)[target].count()})
-        bad_cnt = pd.DataFrame({'bad_cnt': df.groupby(col)[target].sum()})
-        regroup = total_cnt.merge(bad_cnt, left_index=True, right_index=True, how='left')
-        regroup.reset_index(level=0, inplace=True)
-
-        regroup['good_cnt'] = regroup['total_cnt'] - regroup['bad_cnt']
-        regroup['bad_pcnt'] = regroup['bad'] / bad
-        regroup['good_pcnt'] = regroup['good_cnt'] / good
-        regroup['WOE'] = np.log(regroup['bad_pcnt'] / regroup['good_pcnt'])
-        regroup['IV'] = (regroup['bad_pcnt'] - regroup['good_pcnt']) * regroup['WOE']
-
-        return regroup[['WOE', 'IV']]
-
-    @staticmethod
-    def badrate_monotone(df, col, target):
-        """
-        Check the monotone
-
-        Parameters:
-        -----------
-        col: column, after splitted
-        -----------
-
-        return: bool, if the bad rate is monotone
-        """
-        data = df[df[col].notnull() & (df[col] != 'NA')]
-
-        total_cnt = pd.DataFrame({'total_cnt': data.groupby(col)[target].count()})
-        bad_cnt = pd.DataFrame({'bad_cnt': data.groupby(col)[target].sum()})
-        regroup = total_cnt.merge(bad_cnt, left_index=True, right_index=True, how='left')
-        regroup.sort_index(inplace=True)
-        regroup.reset_index(level=0, inplace=True)
-
-        regroup['bad_rate'] = regroup['bad_cnt'] / regroup['total_cnt']
-        badrate_monotone = regroup['bad_rate'].diff().dropna().astype(bool)
-        monotone = len(set(badrate_monotone))
-        return monotone == 1
-
-    def maximum_bin_pcnt(self, col, thd=0.9):
-        """
-        Determine whether the proportion of samples in the largest bin is greater than thd
-
-        Parameters:
-        -----------
-        thd: the proportion of samples
-        -----------
-
-        return: bool, if the proportion is greater than thd
-        """
-
-        bin_cnt = self.data.groupby(col)[col].count()
-        bin_pcnt = bin_cnt / self.data.shape[0]
-        return bin_pcnt.max() >= thd
-
     def badrate_encoding(self, col):
         """
         For category data, use bad_rate to replace the original value, convert into a continuous variable and then band.
@@ -183,54 +111,105 @@ class ChiMerge(object):
 class WOE_IV:
 
     def __init__(self, df, key, y_name):
-        self.set_data(df, key, y_name)
-        self.gen_var_info()
-
-    def set_data(self, df, key, y_name):
-        self.data = df
+        self.data = df.copy()
         if key is not None:
             self.data = df.set_index(keys=key)
         self.y_name = y_name
-        self.target = self.data[[self.target]]
+        self.target = self.data[[self.y_name]]
         self.data.drop(self.y_name, axis=1, inplace=True)
-
-    def gen_var_info(self):
-        self.var_info = pd.DataFrame(self.data.nunique(), columns=['num_of_unique'])
+        self.tables = {}
+        self.var_info = pd.DataFrame()
 
     def cal(self, bin_cnt=10):
         self.gen_table(bin_cnt=10)
-
-
+        self.cal_table()
+        self.gen_var_info()
+        self.woe_replacement()
 
     def gen_table(self, bin_cnt):
         chi2 = ChiMerge(self.data, self.target)
         for col in self.data.columns:
             # binning
             cutoff = chi2.bin_cutoff(col, confidence=3.841, max_bins=bin_cnt)
-            tmp = pd.cut(self.data[col], bins=[-np.inf] + cutoff + [np.inf]).cat.add_categories('NA').fillna('NA')
-            tmp.value_counts().sort_index()
+            tmp = self.data[[col]]
+            tmp['bin_cut'] = pd.cut(tmp[col], bins=[-np.inf] + cutoff + [np.inf]).cat.add_categories('NA').fillna('NA')
+            tmp = pd.concat([tmp, self.target], axis=1)
 
+            num_table = tmp.pivot_table(index='bin_cut', values=col, aggfunc=[np.median, len])
+            num_table.columns = num_table.columns.droplevel(1)
+            num_table.rename(columns={'len': 'size', 'median': 'bin_label'}, inplace=True)
 
-    def to_band(self, cols, max_bins):
-        self.tables = {}
+            flag_table = tmp.pivot_table(index='bin_cut', values=col, columns=self.y_name, aggfunc=len)
+            table = pd.concat([num_table, flag_table], axis=1)
+            table.index.name = 'bin_cut'
+            table.reset_index(level=0, inplace=True)
+            self.tables[col] = table
 
-        chimerge = ChiMerge(self.data, y_name=self.target)
-        for index in range(len(cols)):
-            col = cols[index]
-            max_bin = max_bins[index]
+    def cal_table(self):
+        for col, table in self.tables.items():
+            self.tables[col]['bad_rate'] = (table[1] / table['size']).fillna(0)
+            self.tables[col]['bad_pcnt'] = table[1] / table[1].sum()
+            self.tables[col]['good_pcnt'] = table[0] / table[0].sum()
+            self.tables[col]['sample_pcnt'] = table['size'] / table['size'].sum()
+            self.tables[col]['WOE'] = np.log(self.tables[col]['bad_pcnt'] / self.tables[col]['good_pcnt'])
+            self.tables[col]['IV'] = (self.tables[col]['bad_pcnt'] - self.tables[col]['good_pcnt']) * self.tables[col]['WOE']
 
-            # binning
-            cutoff = chimerge.bin_cutoff(col, confidence=3.841, max_bins=max_bin)
+    def gen_var_info(self):
+        self.var_info = pd.DataFrame(self.data.nunique(), columns=['num_of_unique'])
 
+        missing_rate = {}
+        num_of_bins = {}
+        iv_value = {}
+        is_monotone = {}
+        for col, table in self.tables.items():
+            missing_rate[col] = table['size'][0] / table['size'].sum() if 'NA' in table['bin_cut'] else 0
+            num_of_bins[col] = table.shape[0]
+            iv_value[col] = table['IV'].sum()
+            is_monotone[col] = int(self.badrate_monotone(table))
+        self.var_info['iv_value'] = pd.Series(iv_value)
+        self.var_info['iv_rank'] = self.var_info['iv_value'].rank(method='min')
+        self.var_info['missing_rate(%)'] = np.round(pd.Series(missing_rate), 1)
+        self.var_info['num_of_bins'] = pd.Series(num_of_bins)
+        self.var_info['is_monotone'] = pd.Series(is_monotone)
+        self.var_info.index.name = 'var_name'
 
-            self.band_df[col] = pd.cut(self.data[col], bins=[-np.inf] + cutoff + [np.inf]).cat.add_categories('NA').fillna('NA')
-            if chimerge.badrate_monotone(self.band_df, col, self.target):
-                self.band_monotone_df[col] = self.band_monotone_df[col]
-            else:
-                print('column: ', col, 'band error, reason is not monotone')
+    def woe_replacement(self):
+        for col, table in self.tables.items():
+            self.data[col] = self.data[col].map(table['WOE'].to_dict())
 
-            woe_iv = chimerge.calc_woe_iv(self.band_df, col, self.target)
-            self.woe_df[col] = self.band_df[col].map(woe_iv['WOE'].to_dict())
+    def badrate_monotone(self, table):
+        table = table[table['bin_cut'] != 'NA']
+        monotone = table['bad_rate'].diff().dropna().astype(bool)
+        return len(set(monotone)) == 1
+
+    def save_info(self, path='WOE_IV_Results'):
+        os.makedirs(path, exist_ok=True)
+        self.var_info.sort_values(by='iv_rank').to_excel(path + '\\var_info_table.xlsx')
+        with open(path + '\\var_info.txt', 'w') as file:
+            for col, table in self.tables.items():
+                file.write(col + '\n')
+                table.to_string(file)
+                file.write('\n' * 2)
+        print('Done.')
+
+    def iv_threshold(self, thd=0.01):
+        temp = self.var_info[self.var_info['iv_value'] >= thd].index
+        return temp.values
+
+    def get_data(self, monotone=False, max_bin_pcnt=None):
+        tmp = self.data.copy()
+
+        if monotone:
+            cols = self.var_info[self.var_info['is_monotone']].index.values
+            tmp = tmp[cols]
+
+        if max_bin_pcnt is not None:
+            cols = []
+            for col, table in self.tables.items():
+                if table['sample_pcnt'].max() < max_bin_pcnt:
+                    cols.append(col)
+            tmp = tmp[cols]
+        return pd.concat([tmp, self.target], axis=1)
 
 
 
