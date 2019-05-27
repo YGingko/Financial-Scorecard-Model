@@ -2,15 +2,15 @@
 应用逻辑回归模型实现标准金融评分卡
 
 # 开发流程
-```flow
+```
 st=>start: 数据获取
 e=>end: 部署上线
 G=>operation: EDA
-A=>operation:数据预处理
-B=>operation:变量筛选
-C=>operation:模型开发
-D=>operation:模型验证
-E=>operation:生成评分卡
+A=>operation: 数据预处理
+B=>operation: 变量筛选
+C=>operation: 模型开发
+D=>operation: 模型验证
+E=>operation: 生成评分卡
     
 st->G->A->B->C->D->E->e
 ```
