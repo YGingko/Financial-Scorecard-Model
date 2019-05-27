@@ -2,15 +2,17 @@
 应用逻辑回归模型实现标准金融评分卡
 
 # 开发流程
-```mermaid
-    graph TB
-        A(数据获取) --> B(EDA)
-        B(EDA) --> C(数据预处理)
-        C(数据预处理) --> D(变量筛选)
-        D(变量筛选) --> E(模型开发)
-        E(模型开发) --> F(模型验证)
-        F(模型验证) --> G(生成评分卡)
-        G(生成评分卡) --> H(部署上线)
+```flow
+    st=>start: 数据获取
+    e=>end: 部署上线
+    G=>operation: EDA
+    A=>operation:数据预处理
+    B=>operation:变量筛选
+    C=>operation:模型开发
+    D=>operation:模型验证
+    E=>operation:生成评分卡
+    
+    st->G->A->B->C->D->E->e
 ```
 
 ## 数据预处理 -- 变量分箱
